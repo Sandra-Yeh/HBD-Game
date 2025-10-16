@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>生日格鬥互動遊戲 - 完整版</title>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.js"></script>
+<style>
+  body { margin:0; padding:0; background:hsl(6, 100%, 94%); overflow:hidden; }
+</style>
+</head>
+<body>
+
+
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 400,
+    backgroundColor: '#ffe4e1',
+    parent: 'phaser-example',
+    scene: { preload, create, update }
+};
+
+const game = new Phaser.Game(config);
+
+let player, enemy;
+let cursors, attackKey, specialKey, defendKey;
+let playerHP = 10, enemyHP = 10;
+let inventory = [];
+let attackCooldown = 0, specialCooldown=0, defendCooldown=0;
+let messageText, inventoryText, distanceText;
+let particles;
+let attackRangeCircle, defendRangeCircle;
+// 回合機制
+let currentRound = 1;
+let inputLocked = false; // 回合間隔時鎖定操作
+let roundText;
+let gameEnded = false; // 遊戲結束標記
+// 血條相關
+let playerBarBg, playerBar, enemyBarBg, enemyBar;
+const HP_MAX = 10;
+const BAR_W = 200;
+const BAR_H = 12;
+// 移動和距離相關
+let enemySpeed = 3; // 增加敵人移動速度
+let enemyDirection = 1; // 1 = 向右, -1 = 向左
+let enemyMoveTimer = 0;
+const ATTACK_RANGE = 150; // 攻擊範圍
+const DEFEND_RANGE = 120; // 防守範圍
+
+function preload() {
+    // 載入背景圖片（請將檔案放在同目錄，並依需要調整檔名/路徑）
+    this.load.image('Background', 'img/ Background.jpeg');
+    this.load.image('player', 'img/player1.png');
+    this.load.image('enemy', 'img/player2.png');
+    
+    // 添加載入錯誤處理
+    this.load.on('loaderror', function(event) {
+        console.error('圖片載入失敗:', event.key, event.file);
+    });
+    
+    this.load.on('complete', function() {
+        console.log('所有圖片載入完成');
+    });
+}
+
+function create() {
+    // 背景圖片（覆蓋整個畫布大小）
+    console.log('開始創建遊戲物件...');
+    
+    try {
+        const background = this.add.image(400, 200, 'Background');
+        background.setDisplaySize(800, 400);
+        console.log('背景圖片創建成功');
+    } catch (error) {
+        console.error('背景圖片創建失敗:', error);
+        // 如果背景圖片載入失敗，使用純色背景
+        this.add.rectangle(400, 200, 800, 400, 0xffe4e1);
+        console.log('使用純色背景替代');
+    }
+
+    // 玩家與敵人（先用方塊）
+    try {
+        player = this.add.image(150,300, 'player');
+        player.setDisplaySize(100, 200);
+        console.log('玩家圖片創建成功');
+    } catch (error) {
+        console.error('玩家圖片創建失敗:', error);
+        // 如果玩家圖片載入失敗，使用矩形替代
+        player = this.add.rectangle(150, 300, 100, 200, 0x4ecdc4);
+        console.log('使用矩形替代玩家');
+    }
+    
+    try {
+        enemy = this.add.image(650,300, 'enemy');
+        enemy.setDisplaySize(120, 200);
+        console.log('敵人圖片創建成功');
+    } catch (error) {
+        console.error('敵人圖片創建失敗:', error);
+        // 如果敵人圖片載入失敗，使用矩形替代
+        enemy = this.add.rectangle(650, 300, 120, 200, 0xe74c3c);
+        console.log('使用矩形替代敵人');
+    }
+    
+    // 範圍指示器（半透明圓圈）
+    attackRangeCircle = this.add.circle(0, 0, ATTACK_RANGE, 0xff0000, 0.1).setStrokeStyle(2, 0xff0000, 0.3);
+    defendRangeCircle = this.add.circle(0, 0, DEFEND_RANGE, 0x00ff00, 0.1).setStrokeStyle(2, 0x00ff00, 0.3);
+    attackRangeCircle.setVisible(false);
+    defendRangeCircle.setVisible(false);
+
+    // 文字
+    const titleX = this.scale.width / 2;
+    const titleY = 20;
+    messageText = this.add.text(titleX, titleY, '快打璇風', {fontSize:'22px',fill:'#fff',fontStyle:'bold'}).setOrigin(0.5, 0);
+    inventoryText = this.add.text(20,80,`道具: ${inventory.join(', ')}`,{fontSize:'18px',fill:'#fff',fontStyle:'bold'});
+    distanceText = this.add.text(20, 100, '距離: --', {fontSize:'16px',fill:'#fff',fontStyle:'bold'}).setVisible(false);
+    
+    // 控制說明
+    this.add.text(20, 350, '←→ 移動 | 空白鍵 攻擊 | Z 必殺技 | X 防守', {fontSize:'14px',fill:'#fff',fontStyle:'bold'});
+    this.add.text(20, 370, '紅色範圍: 攻擊範圍 | 綠色範圍: 防守範圍', {fontSize:'12px',fill:'#fff',fontStyle:'bold'});
+
+    // 血條（玩家左、敵人右）
+    playerBarBg = this.add.rectangle(20, 50, BAR_W, BAR_H, 0x000000, 0.2).setOrigin(0, 0.5);
+    playerBar   = this.add.rectangle(20, 50, BAR_W, BAR_H, 0x2ecc71).setOrigin(0, 0.5);
+    enemyBarBg  = this.add.rectangle(800 - 20 - BAR_W, 50, BAR_W, BAR_H, 0x000000, 0.2).setOrigin(0, 0.5);
+    enemyBar    = this.add.rectangle(800 - 20 - BAR_W, 50, BAR_W, BAR_H, 0xe74c3c).setOrigin(0, 0.5);
+
+    // 控制
+    cursors = this.input.keyboard.createCursorKeys();
+    attackKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    specialKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
+    defendKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
+
+    // 粒子系統 (攻擊/煙火)
+    // 生成一個簡單的紅色粒子材質，避免缺少貼圖
+    const g = this.add.graphics();
+    g.fillStyle(0xff0000, 1);
+    g.fillCircle(4, 4, 4);
+    g.generateTexture('red', 8, 8);
+    g.destroy();
+    particles = this.add.particles('red');
+
+    // 回合開始提示
+    showRound(this, currentRound);
+}
+
+function update(time, delta) {
+    // 如果遊戲已結束，停止所有更新
+    if(gameEnded) {
+        console.log('遊戲已結束，停止更新');
+        return;
+    }
+    
+    let speed=3;
+    attackCooldown -= delta;
+    specialCooldown -= delta;
+    defendCooldown -= delta;
+    enemyMoveTimer -= delta;
+
+    // 計算距離
+    const distance = Math.abs(player.x - enemy.x);
+
+    // 玩家移動
+    if(!inputLocked && cursors.left.isDown) player.x -= speed;
+    if(!inputLocked && cursors.right.isDown) player.x += speed;
+
+    // 敵人移動邏輯
+    if(!inputLocked) {
+        if(enemyMoveTimer <= 0) {
+            // 隨機改變方向
+            enemyDirection = Math.random() < 0.5 ? -1 : 1;
+            enemyMoveTimer = 1000 + Math.random() * 2000; // 1-3秒間隔
+        }
+        
+        // 敵人移動
+        enemy.x += enemyDirection * enemySpeed;
+        
+        // 邊界檢查
+        if(enemy.x < 100) enemy.x = 100;
+        if(enemy.x > 700) enemy.x = 700;
+    }
+
+    // 距離檢測和攻擊
+    const canAttack = distance <= ATTACK_RANGE;
+    const canDefend = distance <= DEFEND_RANGE;
+    
+    // 更新範圍指示器位置和可見性
+    if(attackRangeCircle) {
+        attackRangeCircle.setPosition(player.x, player.y);
+        attackRangeCircle.setVisible(canAttack);
+    }
+    if(defendRangeCircle) {
+        defendRangeCircle.setPosition(player.x, player.y);
+        defendRangeCircle.setVisible(canDefend);
+    }
+
+    // 普通攻擊（需要近距離）
+    if(!inputLocked && Phaser.Input.Keyboard.JustDown(attackKey) && attackCooldown<=0) {
+        if(canAttack) {
+            attackCooldown=500;
+            console.log(`攻擊前敵人血量: ${enemyHP}`);
+            enemyHP -=2;
+            console.log(`攻擊後敵人血量: ${enemyHP}`);
+            messageText.setText('你攻擊了敵人！敵人掉 2 HP');
+            createParticles(enemy.x,enemy.y,15);
+        } else {
+            messageText.setText('距離太遠！靠近敵人才能攻擊！');
+        }
+    }
+
+    // 必殺技（需要近距離）
+    if(!inputLocked && Phaser.Input.Keyboard.JustDown(specialKey) && specialCooldown<=0) {
+        if(canAttack) {
+            specialCooldown=2000;
+            enemyHP -=4;
+            messageText.setText('你使出必殺技！敵人掉 4 HP 💥');
+            createParticles(enemy.x,enemy.y,30);
+        } else {
+            messageText.setText('距離太遠！靠近敵人才能使用必殺技！');
+        }
+    }
+
+    // 防守（需要近距離）
+    if(!inputLocked && Phaser.Input.Keyboard.JustDown(defendKey) && defendCooldown<=0) {
+        if(canDefend) {
+            defendCooldown=1000;
+            messageText.setText('你進入防守姿態！減少傷害！');
+            createParticles(player.x,player.y,10);
+        } else {
+            messageText.setText('敵人太遠！無法防守！');
+        }
+    }
+
+    // 敵人攻擊（只有近距離時才會攻擊）- 增強版
+    const attackChance = currentRound === 1 ? 0.008 : 0.012; // 第二回合攻擊更頻繁
+    
+    if(!inputLocked && distance <= ATTACK_RANGE && Math.random() < attackChance) {
+        // 根據回合數增加傷害
+        const baseDamage = currentRound === 1 ? 1 : 2; // 第二回合基礎傷害更高
+        
+        let damage;
+        const rand = Math.random();
+        
+        if(rand < 0.2) {
+            damage = baseDamage + 3; // 20%機率造成重擊
+        } else if(rand < 0.5) {
+            damage = baseDamage + 2; // 30%機率造成中擊
+        } else {
+            damage = baseDamage + 1; // 50%機率造成輕擊
+        }
+        
+        playerHP -= damage;
+        
+        // 根據傷害和回合顯示不同的訊息
+        let attackMessage;
+        if(damage >= 5) {
+            attackMessage = `敵人重擊你！你掉 ${damage} HP 💥`;
+        } else if(damage >= 4) {
+            attackMessage = `敵人強力攻擊你！你掉 ${damage} HP ⚡`;
+        } else if(damage >= 3) {
+            attackMessage = `敵人攻擊你！你掉 ${damage} HP`;
+        } else {
+            attackMessage = `敵人輕擊你！你掉 ${damage} HP`;
+        }
+        
+        // 第二回合的特殊訊息
+        if(currentRound >= 2) {
+            attackMessage += " (Round 2 強化!)";
+        }
+        
+        messageText.setText(attackMessage);
+        createParticles(player.x,player.y,15);
+    }
+
+    // 更新血條寬度
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    playerBar.displayWidth = BAR_W * clamp(playerHP, 0, HP_MAX) / HP_MAX;
+    enemyBar.displayWidth  = BAR_W * clamp(enemyHP, 0, HP_MAX) / HP_MAX;
+
+    // 勝利判斷
+    if(enemyHP<=0){
+        // 防止重複執行勝利邏輯
+        if(inputLocked) {
+            console.log('勝利邏輯被跳過，inputLocked = true');
+            return;
+        }
+        
+        console.log(`敵人血量歸零，當前回合: ${currentRound}, inputLocked: ${inputLocked}`);
+        
+        // 立即鎖定輸入，防止重複執行
+        inputLocked = true;
+        
+        // 獲得道具邏輯
+        let items = ['🎁','🪄'];
+        let item = items[Math.floor(Math.random()*items.length)];
+        inventory.push(item);
+        inventoryText.setText(`道具: ${inventory.join(', ')}`);
+        messageText.setText(`你打敗了敵人！獲得道具 ${item}`);
+        
+        console.log(`獲得道具: ${item}, 目前道具: ${inventory.join(', ')}`);
+        
+        // 重置敵人血量
+        enemyHP = 10;
+
+        // 回合推進與間隔
+        console.log(`當前回合: ${currentRound}`);
+        if(currentRound < 2){
+            currentRound += 1;
+            console.log(`進入下一回合: ${currentRound}`);
+            // 延遲啟動下一回合，確保道具顯示清楚
+            this.time.delayedCall(1500, () => {
+                startIntermission(this);
+            });
+        } else {
+            // Round 2 結束，準備結局
+            console.log('Round 2 結束，準備顯示結局');
+            
+            // 延遲 2 秒後顯示結局，確保所有狀態穩定
+            this.time.delayedCall(2000, () => {
+                console.log('開始顯示結局，當前道具:', inventory);
+                gameEnded = true; // 在結局顯示時才標記遊戲結束
+                showEnding(this);
+            });
+        }
+        return; // 跳出 update 函式，避免重複執行
+    }
+
+    // 玩家死亡
+    if(playerHP<=0){
+        messageText.setText('你被打敗了，重新戰鬥 💀');
+        playerHP = 10;
+        enemyHP = 10;
+        inputLocked = false; // 重新開始戰鬥
+    }
+}
+
+function createParticles(x,y,count){
+    let emitter = particles.createEmitter({
+        x:x, y:y,
+        speed:{min:100,max:200},
+        angle:{min:0,max:360},
+        lifespan:400,
+        quantity:count,
+        scale:{start:0.5,end:0},
+    });
+    emitter.explode(count,x,y);
+}
+
+function showEnding(scene){
+    console.log('showEnding 被調用，道具列表:', inventory);
+    
+    // 確保輸入完全鎖定和遊戲結束
+    inputLocked = true;
+    gameEnded = true;
+    
+    // 隱藏玩家和敵人
+    if(player) player.setVisible(false);
+    if(enemy) enemy.setVisible(false);
+    
+    // 隱藏範圍指示器
+    if(attackRangeCircle) attackRangeCircle.setVisible(false);
+    if(defendRangeCircle) defendRangeCircle.setVisible(false);
+    
+    // 隱藏所有 UI 元素
+    if(messageText) messageText.setVisible(false);
+    if(inventoryText) inventoryText.setVisible(false);
+    if(distanceText) distanceText.setVisible(false);
+    if(playerBarBg) playerBarBg.setVisible(false);
+    if(playerBar) playerBar.setVisible(false);
+    if(enemyBarBg) enemyBarBg.setVisible(false);
+    if(enemyBar) enemyBar.setVisible(false);
+    
+    // 隱藏控制說明文字
+    const controlTexts = scene.children.list.filter(child => 
+        child.type === 'Text' && 
+        (child.text.includes('←→ 移動') || child.text.includes('紅色範圍'))
+    );
+    controlTexts.forEach(text => text.setVisible(false));
+    
+    // 停止所有粒子效果
+    if(particles) {
+        particles.destroy();
+        particles = null;
+    }
+    
+    // 清理回合文字
+    if(roundText) {
+        roundText.destroy();
+        roundText = null;
+    }
+    
+    let endingMsg='';
+    console.log('檢查道具:', inventory);
+    console.log('道具數量:', inventory.length);
+    console.log('🎁 數量:', inventory.filter(i => i === '🎁').length);
+    console.log('🪄 數量:', inventory.filter(i => i === '🪄').length);
+    
+    // 修復結局邏輯 - 確保能正確判斷
+    console.log('開始結局判斷邏輯...');
+    if(inventory.length >= 2) {
+        console.log('道具數量足夠，開始分析道具類型...');
+        const giftCount = inventory.filter(i => i === '🎁').length;
+        const magicCount = inventory.filter(i => i === '🪄').length;
+        
+        if(giftCount >= 1 && magicCount >= 1) {
+            // 混合道具 - 顯示轉盤
+            console.log('顯示結局C - 轉盤（混合道具）');
+            showRoulette(scene);
+            return;
+        } else if(giftCount >= 1) {
+            // 主要是禮物
+            endingMsg="✨ 結局A: 生日禮物選項1！";
+            console.log('顯示結局A - 禮物');
+        } else if(magicCount >= 1) {
+            // 主要是魔法
+            endingMsg="🪄 結局B: 生日禮物選項2！";
+            console.log('顯示結局B - 魔法');
+        } else {
+            // 預設轉盤
+            console.log('顯示結局C - 轉盤（預設）');
+            showRoulette(scene);
+            return;
+        }
+    } else {
+        // 道具不足，顯示轉盤
+        console.log('道具不足，顯示轉盤');
+        showRoulette(scene);
+        return;
+    }
+
+    // 煙火粒子
+    let firework = scene.add.particles('red');
+    let fwEmitter = firework.createEmitter({
+        x:400, y:200,
+        speed:{min:100,max:300},
+        angle:{min:0,max:360},
+        lifespan:800,
+        quantity:30,
+        scale:{start:0.8,end:0},
+    });
+    fwEmitter.explode(50,400,200);
+
+    // 結局訊息 - 使用 h1 大小的字體
+    console.log('準備顯示結局訊息:', endingMsg);
+    const centerX = scene.scale.width / 2;
+    const centerY = scene.scale.height / 2;
+    const endingText = scene.add.text(centerX, centerY, endingMsg, {
+        fontSize:'56px',
+        fill:'#fff',
+        fontStyle:'bold',
+        stroke:'#000',
+        strokeThickness:4,
+        align:'center'
+    }).setOrigin(0.5, 0.5);
+    
+    console.log('結局文字已創建:', endingText.text);
+}
+
+ // ---- 轉盤功能 ----
+ function showRoulette(scene){
+     // 獎項設定
+     const prizes = ['10元', '10元', '50元', '100元', '500元'];
+     const colors = [0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff]; // 純白色
+    
+    // 標題
+    scene.add.text(400, 50, '🎰 隨機獎金轉盤 🎰', {
+        fontSize:'32px',
+        fill:'#fff',
+        fontStyle:'bold',
+        stroke:'#000',
+        strokeThickness:3
+    }).setOrigin(0.5, 0.5);
+    
+    // 轉盤容器
+    const centerX = 400;
+    const centerY = 200;
+    const radius = 120;
+    
+    // 創建轉盤容器
+    const rouletteContainer = scene.add.container(centerX, centerY);
+    
+    // 繪製轉盤扇形
+    const graphics = scene.add.graphics();
+    const angleStep = (Math.PI * 2) / prizes.length;
+    
+    prizes.forEach((prize, index) => {
+        const startAngle = index * angleStep - Math.PI / 2;
+        const endAngle = (index + 1) * angleStep - Math.PI / 2;
+        
+        // 扇形背景
+        graphics.fillStyle(colors[index], 0.8);
+        graphics.slice(0, 0, radius, startAngle, endAngle, true);
+        graphics.fillPath();
+        
+        // 扇形邊框
+        graphics.lineStyle(3, 0x000000, 1);
+        graphics.slice(0, 0, radius, startAngle, endAngle, true);
+        graphics.strokePath();
+        
+        // 文字
+        const textAngle = startAngle + angleStep / 2;
+        const textX = Math.cos(textAngle) * (radius * 0.7);
+        const textY = Math.sin(textAngle) * (radius * 0.7);
+        
+        const textObj = scene.add.text(textX, textY, prize, {
+            fontSize:'18px',
+            fill:'#000',
+            fontStyle:'bold',
+            stroke:'#fff',
+            strokeThickness:2
+        }).setOrigin(0.5, 0.5);
+        
+        rouletteContainer.add(textObj);
+    });
+    
+    // 將圖形添加到容器
+    rouletteContainer.add(graphics);
+    
+    // 中心指針（固定，不旋轉）
+    const pointer = scene.add.graphics();
+    pointer.fillStyle(0xff0000, 1);
+    pointer.fillTriangle(0, -20, -10, 10, 10, 10);
+    pointer.fillPath();
+    pointer.setPosition(centerX, centerY);
+    
+     // 轉動狀態文字
+     const spinningText = scene.add.text(400, 350, '轉動中...', {
+         fontSize:'24px',
+         fill:'#ffd700',
+         fontStyle:'bold',
+         stroke:'#000',
+         strokeThickness:3
+     }).setOrigin(0.5, 0.5);
+     
+     // 可獲得金額提示
+     const availableText = scene.add.text(400, 320, '可獲得：10元、50元、100元、500元', {
+         fontSize:'16px',
+         fill:'#fff',
+         fontStyle:'bold',
+         stroke:'#000',
+         strokeThickness:2
+     }).setOrigin(0.5, 0.5);
+     
+     // 轉盤旋轉動畫
+     const targetRotation = Math.random() * 20 + 10; // 10-30圈
+     const spinDuration = 3000; // 3秒
+     
+     const spinTween = scene.tweens.add({
+         targets: rouletteContainer,
+         rotation: targetRotation * Math.PI * 2,
+         duration: spinDuration,
+         ease: 'Power2.easeOut',
+         onUpdate: () => {
+             // 轉動時更新文字效果
+             const progress = spinTween.progress;
+             if (progress < 0.9) {
+                 spinningText.setText(`轉動中... ${Math.floor(progress * 100)}%`);
+             }
+         },
+         onComplete: () => {
+             // 計算最終結果
+             const finalRotation = rouletteContainer.rotation % (Math.PI * 2);
+             const adjustedAngle = (finalRotation + Math.PI / 2) % (Math.PI * 2);
+             if (adjustedAngle < 0) adjustedAngle += Math.PI * 2;
+             
+             const prizeIndex = Math.floor(adjustedAngle / angleStep) % prizes.length;
+             const selectedPrize = prizes[prizeIndex];
+             
+             // 簡單的高亮效果：在得獎扇形上添加一個半透明圓圈
+             const highlightAngle = prizeIndex * angleStep - Math.PI / 2 + angleStep / 2;
+             const highlightX = Math.cos(highlightAngle) * (radius * 0.5);
+             const highlightY = Math.sin(highlightAngle) * (radius * 0.5);
+             
+             const highlightCircle = scene.add.circle(highlightX, highlightY, radius * 0.3, 0xffffcc, 0.6);
+             highlightCircle.setPosition(centerX + highlightX, centerY + highlightY);
+             
+             // 隱藏轉動提示
+             spinningText.destroy();
+             availableText.destroy();
+             
+             // 顯示得獎結果
+             const resultText = scene.add.text(400, 320, `🎉 恭喜獲得：${selectedPrize} 🎉`, {
+                 fontSize:'32px',
+                 fill:'#ffd700',
+                 fontStyle:'bold',
+                 stroke:'#000',
+                 strokeThickness:4
+             }).setOrigin(0.5, 0.5);
+             
+             // 添加閃爍效果
+             scene.tweens.add({
+                 targets: resultText,
+                 alpha: 0.3,
+                 duration: 500,
+                 yoyo: true,
+                 repeat: 3,
+                 ease: 'Sine.easeInOut'
+             });
+             
+             // 煙火效果
+             let firework = scene.add.particles('red');
+             let fwEmitter = firework.createEmitter({
+                 x:400, y:200,
+                 speed:{min:100,max:300},
+                 angle:{min:0,max:360},
+                 lifespan:800,
+                 quantity:30,
+                 scale:{start:0.8,end:0},
+             });
+             fwEmitter.explode(50,400,200);
+         }
+     });
+}
+
+// ---- 回合提示與間隔 ----∫
+function showRound(scene, round){
+    inputLocked = true;
+    if(roundText) roundText.destroy();
+    const cx = scene.scale.width / 2;
+    const cy = scene.scale.height / 2;
+    roundText = scene.add.text(cx, cy, `Round ${round}`, { fontSize:'36px', fill:'#fff', fontStyle:'bold' }).setOrigin(0.5);
+    scene.time.delayedCall(1200, ()=>{
+        inputLocked = false;
+        roundText.destroy();
+    });
+}
+
+function startIntermission(scene){
+    console.log(`startIntermission 被調用，當前回合: ${currentRound}`);
+    inputLocked = true;
+    if(roundText) roundText.destroy();
+    const cx = scene.scale.width / 2;
+    const cy = scene.scale.height / 2;
+    roundText = scene.add.text(cx, cy, `Round ${currentRound}`, { fontSize:'36px', fill:'#fff', fontStyle:'bold' }).setOrigin(0.5);
+    // 短暫間隔 1.2 秒
+    scene.time.delayedCall(1200, ()=>{
+        console.log(`回合間隔結束，解鎖輸入，當前回合: ${currentRound}`);
+        inputLocked = false;
+        roundText.destroy();
+        // 確保遊戲未結束才解鎖
+        if(!gameEnded) {
+            messageText.setText('新回合開始！');
+        }
+    });
+}
+</script>
+
+</body>
+</html>
