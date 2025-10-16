@@ -1,0 +1,2 @@
+這個檔案應該重新命名為 .nojekyll（沒有副檔名）
+這是給 GitHub Pages 的配置檔案，告訴它不要使用 Jekyll 處理您的網站
