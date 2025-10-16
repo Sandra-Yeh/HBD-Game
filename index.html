@@ -51,7 +51,7 @@ const DEFEND_RANGE = 120; // 防守範圍
 function preload() {
     console.log('開始載入圖片...');
     // 載入背景圖片（請將檔案放在同目錄，並依需要調整檔名/路徑）
-    this.load.image('Background', 'img/ Background.jpeg');
+    this.load.image('Background', 'img/Background.jpeg');
     this.load.image('player', 'img/player1.png');
     this.load.image('enemy', 'img/player2.png');
     console.log('圖片載入請求已發送');
@@ -59,6 +59,7 @@ function preload() {
     // 添加載入錯誤處理
     this.load.on('loaderror', function(event) {
         console.error('圖片載入失敗:', event.key, event.file);
+        console.log('將使用備用方案繼續遊戲');
     });
     
     this.load.on('complete', function() {
